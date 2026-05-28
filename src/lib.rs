@@ -1,7 +1,6 @@
 #![no_std]
 
+extern crate alloc;
+
 mod dlso;
 mod elf;
-
-// Re-exports for the main API
-pub use elf::ElfFile;

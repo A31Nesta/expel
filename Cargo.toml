@@ -10,3 +10,5 @@ repository  = "https://git.black.observer/neos/expel"
 license     = "MIT OR Apache-2.0"
 
 [dependencies]
+bytemuck = { version = "1.25.0", features = ["derive"] }
+elf = { version = "0.8.0", default-features = false }
