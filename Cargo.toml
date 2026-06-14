@@ -9,6 +9,24 @@ authors     = [ "A31Nesta" ]
 repository  = "https://git.black.observer/neos/expel"
 license     = "MIT OR Apache-2.0"
 
+[features]
+default = ["esp32-s3"]
+
+bus-address-mirror = []
+dlso = []
+cache-offset = []
+set-mmu = []
+
+# Per-device presets
+# ==================
+# MAIN TARGET: Cardputer ADV, ESP32-S3 with no PSRAM
+esp32-s3 = ["bus-address-mirror"]
+# SECONDARY TARGET: LilyGO T-Deck, ESP32-S3 with PSRAM
+esp32-s3-psram = ["esp32-s3", "cache-offset"]
+# EXPERIMENTAL TARGET: Cardputer P4, ESP32-P4 - not known if PSRAM is present
+esp32-p4 = [] # PSRAM possible, no further features required to enable it
+
 [dependencies]
 bytemuck = { version = "1.25.0", features = ["derive"] }
 elf = { version = "0.8.0", default-features = false }
+allocator-api2 = { version = "0.3.0", default-features = false, features = ["alloc"] }
