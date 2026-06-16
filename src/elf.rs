@@ -3,6 +3,7 @@
 mod error;
 mod types;
 
+mod symbol;
 mod util;
 
 use core::ptr::copy_nonoverlapping;
@@ -217,4 +218,13 @@ where
     }
 
     Ok(elf)
+}
+
+/// Decode and relocate ELF data
+fn elf_relocate<I, D>(pbuf: &[u8], data_alloc: D, iram_alloc: I) -> Result<(), ExpelError>
+where
+    I: Allocator,
+    D: Allocator,
+{
+    todo!()
 }
