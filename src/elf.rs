@@ -254,7 +254,7 @@ fn symtab_with_strtab_for_shdr<'a>(
 }
 
 /// Decode and relocate ELF data
-pub fn elf_relocate<I>(pbuf: &[u8], iram_alloc: I) -> Result<(), ExpelError>
+pub fn elf_relocate<I>(pbuf: &[u8], iram_alloc: I) -> Result<Elf<I>, ExpelError>
 where
     I: Allocator,
 {
@@ -347,7 +347,7 @@ where
     // TODO: Add `psram` feature or config option for flush. Original C line:
     // esp_elf_arch_flush();
 
-    Ok(())
+    Ok(elf)
 }
 
 /// Calls the main function using Rust String slices as arguments.
