@@ -8,8 +8,12 @@ mod util;
 
 mod arch;
 
-use core::ptr::copy_nonoverlapping;
+use core::{
+    ffi::{c_char, c_int},
+    ptr::{copy_nonoverlapping, null},
+};
 
+use alloc::{ffi::CString, vec::Vec};
 use allocator_api2::alloc::Allocator;
 use elf::{
     ElfBytes,
@@ -18,10 +22,9 @@ use elf::{
         STT_FILE, STT_OBJECT, STT_SECTION,
     },
     endian::NativeEndian,
-    parse::ParsingTable,
     section::{SectionHeader, SectionHeaderTable},
     string_table::StringTable,
-    symbol::{Elf32_Sym, SymbolTable},
+    symbol::SymbolTable,
 };
 
 use crate::elf::{
@@ -257,7 +260,7 @@ fn symtab_with_strtab_for_shdr<'a>(
 }
 
 /// Decode and relocate ELF data
-fn elf_relocate<I, D>(pbuf: &[u8], data_alloc: D, iram_alloc: I) -> Result<(), ExpelError>
+pub fn elf_relocate<I, D>(pbuf: &[u8], data_alloc: D, iram_alloc: I) -> Result<(), ExpelError>
 where
     I: Allocator,
     D: Allocator,
@@ -352,6 +355,34 @@ where
     // esp_elf_arch_flush();
 
     Ok(())
+}
+
+/// Calls the main function using Rust String slices as arguments.
+///
+/// THIS REQUIRES A GLOBAL ALLOCATOR!!
+pub fn elf_request<I, D>(elf: &Elf<I, D>, args: &[&str]) -> i32
+where
+    I: Allocator,
+    D: Allocator,
+{
+    if let Some(entry) = elf.entry {
+        // Conversion to C Strings
+        let mut argv: Vec<*const c_char> = args
+            .iter()
+            .map(|s| {
+                let cstr = CString::new(*s).unwrap();
+                cstr.as_ptr()
+            })
+            .collect();
+
+        argv.push(null());
+
+        // Ru-nning in the nine-ties
+        let main = unsafe { *entry };
+        main(args.len() as c_int, argv.as_ptr())
+    } else {
+        -1
+    }
 }
 
 fn elf_map_sym<I, D>(elf: &Elf<I, D>, sym: u32) -> u32

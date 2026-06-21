@@ -71,7 +71,7 @@ impl<'a> Iterator for ElfSectionsIterator<'a> {
     }
 }
 
-pub type ElfMain = extern "C" fn(argc: c_int, argv: *mut *mut c_char) -> c_int;
+pub type ElfMain = extern "C" fn(argc: c_int, argv: *const *const c_char) -> c_int;
 
 /// ELF struct that will be used throughout this crate, adapted from
 /// the ELF Loader IDF Component by Espressif.
