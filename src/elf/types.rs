@@ -34,6 +34,43 @@ pub struct ElfSections {
     pub bss: ElfSection,
 }
 
+impl<'a> IntoIterator for &'a ElfSections {
+    type Item = &'a ElfSection;
+    type IntoIter = ElfSectionsIterator<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        ElfSectionsIterator::new(self)
+    }
+}
+
+/// ElfSections as an iterator
+pub struct ElfSectionsIterator<'a> {
+    sections: &'a ElfSections,
+    index: u8,
+}
+
+impl<'a> ElfSectionsIterator<'a> {
+    pub fn new(sections: &'a ElfSections) -> Self {
+        Self { sections, index: 0 }
+    }
+}
+
+impl<'a> Iterator for ElfSectionsIterator<'a> {
+    type Item = &'a ElfSection;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.index += 1;
+        match self.index {
+            1 => Some(&self.sections.text),
+            2 => Some(&self.sections.data),
+            3 => Some(&self.sections.rodata),
+            4 => Some(&self.sections.data_rel_ro),
+            5 => Some(&self.sections.bss),
+            _ => None,
+        }
+    }
+}
+
 pub type ElfMain = extern "C" fn(argc: c_int, argv: *mut *mut c_char) -> c_int;
 
 /// ELF struct that will be used throughout this crate, adapted from

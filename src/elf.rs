@@ -6,22 +6,34 @@ mod types;
 mod symbol;
 mod util;
 
+mod arch;
+
 use core::ptr::copy_nonoverlapping;
 
 use allocator_api2::alloc::Allocator;
 use elf::{
     ElfBytes,
-    abi::{SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE, SHT_NOBITS, SHT_PROGBITS},
+    abi::{
+        SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE, SHT_NOBITS, SHT_PROGBITS, SHT_RELA, STT_COMMON,
+        STT_FILE, STT_OBJECT, STT_SECTION,
+    },
     endian::NativeEndian,
+    parse::ParsingTable,
+    section::{SectionHeader, SectionHeaderTable},
+    string_table::StringTable,
+    symbol::{Elf32_Sym, SymbolTable},
 };
 
 use crate::elf::{
+    arch::elf_arch_relocate,
     error::ExpelError,
+    symbol::elf_find_symbol,
     types::{Elf, ElfMain},
     util::{elf_align, has_flag, map_mem_err},
 };
 
 fn elf_load_section<I, D>(
+    elf_file: &ElfBytes<NativeEndian>,
     pbuf: &[u8],
     data_alloc: D,
     iram_alloc: I,
@@ -31,9 +43,6 @@ where
     D: Allocator,
 {
     let mut elf = Elf::empty(iram_alloc, data_alloc);
-
-    let elf_file = ElfBytes::<NativeEndian>::minimal_parse(pbuf)
-        .map_err(|_| ExpelError::ParseError("Shit didn't parse"))?;
 
     // Parse, we copy this block from `ElfFile::section_header_by_name` since it does what we want in this case lmao
     let (shdrs, strtab) = match elf_file
@@ -220,11 +229,141 @@ where
     Ok(elf)
 }
 
+/// Obtains the Symbol Table and String Table for the section header and
+/// returns them as instances of SymbolTable and StringTable.
+fn symtab_with_strtab_for_shdr<'a>(
+    elf_file: &'a ElfBytes<NativeEndian>,
+    section_headers: SectionHeaderTable<NativeEndian>,
+    shdr: &'_ SectionHeader,
+) -> (SymbolTable<'a, NativeEndian>, StringTable<'a>) {
+    // Get symbol table
+    let symtab_shdr = section_headers
+        .get(shdr.sh_link as usize)
+        .expect("Couldn't get RELA symtab shdr");
+    let symtab_data = elf_file
+        .section_data(&symtab_shdr)
+        .expect("Couldn't get RELA symtab data");
+    let symtab = SymbolTable::new(NativeEndian, elf_file.ehdr.class, &symtab_data.0);
+
+    // Get string table
+    let strtab_shdr = section_headers
+        .get(symtab_shdr.sh_link as usize)
+        .expect("Couldn't get RELA strtab shdr");
+    let strtab = elf_file
+        .section_data_as_strtab(&strtab_shdr)
+        .expect("Couldn't parse RELA strtab");
+
+    (symtab, strtab)
+}
+
 /// Decode and relocate ELF data
 fn elf_relocate<I, D>(pbuf: &[u8], data_alloc: D, iram_alloc: I) -> Result<(), ExpelError>
 where
     I: Allocator,
     D: Allocator,
 {
-    todo!()
+    // Parse the ELF file from `pbuf` and obtain the `ElfBytes` object
+    let elf_file = ElfBytes::<NativeEndian>::minimal_parse(pbuf)
+        .map_err(|_| ExpelError::ParseError("Shit didn't parse"))?;
+
+    // Get the `elf` object that contains allocated `text` and `data` buffers and section information
+    #[cfg(feature = "bus-address-mirror")]
+    let mut elf = elf_load_section(&elf_file, pbuf, data_alloc, iram_alloc)?;
+    #[cfg(not(feature = "bus-address-mirror"))]
+    let elf = compile_error!(
+        "elf_relocate: `bus-address-mirror` feature must be enabled. `elf_load_segment` function is not implemented in this version"
+    );
+
+    let section_headers = elf_file
+        .section_headers()
+        .expect("Parsing error on Section Headers");
+
+    // Get section with `SHT_RELA` type and do the stuff(TM) with all the relocations
+    // TODO: When implementing DLSO, remove the filter and change it into a check (`if`) inside the loop
+    for shdr in section_headers
+        .iter()
+        .filter(|shdr| shdr.sh_type == SHT_RELA)
+    {
+        // Get relocations
+        let relas = elf_file
+            .section_data_as_relas(&shdr)
+            .expect("Parsing error on Section Data as RELAs");
+
+        // Get Symtab and Strtab
+        let (symtab, strtab) = symtab_with_strtab_for_shdr(&elf_file, section_headers, &shdr);
+
+        // Main loop over all relocations
+        for rela in relas {
+            let sym = symtab
+                .get(rela.r_sym as usize)
+                .expect("Couldn't obtain symbol for RELA");
+
+            let r_type = rela.r_type as u8;
+            let name = strtab
+                .get(sym.st_name as usize)
+                .expect("Couldn't parse string from strtab");
+
+            let addr = if r_type == STT_COMMON || r_type == STT_OBJECT || r_type == STT_SECTION {
+                let addr = elf_find_symbol(name);
+
+                // We prepare this for future (possible updates)
+                #[cfg(feature = "dlso")]
+                {
+                    compile_error!("elf_relocate: DLSO is not yet supported");
+                }
+
+                // TODO: Change check from `== 0` to `Result`
+                // TODO: Remove the panic!
+                if addr == 0 {
+                    panic!("Can't find dumbass symbol");
+                }
+                Some(addr)
+            } else if r_type == STT_FILE {
+                let addr = if sym.st_value != 0 {
+                    elf_map_sym(&elf, sym.st_value as u32) as usize
+                } else {
+                    elf_find_symbol(name)
+                };
+
+                // We prepare this for future (possible updates)
+                #[cfg(feature = "dlso")]
+                {
+                    compile_error!("elf_relocate: DLSO is not yet supported");
+                }
+
+                // TODO: Change check from `== 0` to `Result`
+                // TODO: Remove the panic!
+                if addr == 0 {
+                    panic!("Can't find dumbass symbol");
+                }
+
+                Some(addr)
+            } else {
+                None
+            };
+
+            if let Some(address) = addr {
+                elf_arch_relocate(&mut elf, &rela, &sym, address as u32);
+            }
+        }
+    }
+
+    // TODO: Add `psram` feature or config option for flush. Original C line:
+    // esp_elf_arch_flush();
+
+    Ok(())
+}
+
+fn elf_map_sym<I, D>(elf: &Elf<I, D>, sym: u32) -> u32
+where
+    I: Allocator,
+    D: Allocator,
+{
+    for section in &elf.sections {
+        if (sym >= section.v_addr) && (sym < (section.v_addr + section.size)) {
+            return sym - section.v_addr + section.addr;
+        }
+    }
+
+    0
 }
