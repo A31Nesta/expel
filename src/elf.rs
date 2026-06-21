@@ -8,8 +8,11 @@ mod util;
 
 mod arch;
 
+pub use types::ElfMain;
+
 use core::{
     ffi::{c_char, c_int},
+    mem::transmute,
     ptr::{copy_nonoverlapping, null},
 };
 
@@ -31,7 +34,7 @@ use crate::elf::{
     arch::elf_arch_relocate,
     error::ExpelError,
     symbol::elf_find_symbol,
-    types::{Elf, ElfMain},
+    types::Elf,
     util::{elf_align, has_flag, map_mem_err},
 };
 
@@ -98,10 +101,6 @@ where
             elf.sections.bss.offset = shdr.sh_offset as u32;
         }
     });
-
-    // The mallocs :(
-    // TODO: Make the calls to `malloc` optional, make `alloc` optional. Separate this into low-level API and high-level API. In low-level, the function returns a request of what to allocate, in high-level, it allocates directly.
-    // For now, let's use the mallocs directly, we want things to work, we'll fix things up later
 
     if elf.sections.text.size == 0 {
         return Err(ExpelError::NoTextSection);
@@ -220,7 +219,7 @@ where
     }
     #[cfg(not(feature = "cache-offset"))]
     {
-        elf.entry = Some(entry as *mut ElfMain);
+        elf.entry = Some(entry as *mut u8);
     }
 
     Ok(elf)
@@ -370,7 +369,7 @@ where
         argv.push(null());
 
         // Ru-nning in the nine-ties
-        let main = unsafe { *entry };
+        let main: ElfMain = unsafe { transmute(entry) };
         main(args.len() as c_int, argv.as_ptr())
     } else {
         -1

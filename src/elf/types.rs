@@ -100,8 +100,8 @@ where
 
     /// "`.bss`", "`.data`", "`.rodata`", "`.text`"
     pub sections: ElfSections,
-    // Entry pointer of ELF
-    pub entry: Option<*mut ElfMain>,
+    // Entry pointer of ELF but stored as a pointer to data
+    pub entry: Option<*mut u8>,
 
     /// `.text` symbol offset
     #[cfg(feature = "set-mmu")]
@@ -134,7 +134,7 @@ where
         #[cfg(not(feature = "bus-address-mirror"))] svaddr: u32,
 
         sections: ElfSections,
-        entry: *mut ElfMain,
+        entry: *mut u8,
 
         #[cfg(feature = "set-mmu")] text_off: u32,
         #[cfg(feature = "set-mmu")] mmu_off: u32,
