@@ -1,8 +1,5 @@
 use allocator_api2::alloc::Allocator;
-use elf::{
-    relocation::{Elf32_Rela, Rela},
-    symbol::{Elf32_Sym, Symbol},
-};
+use elf::{relocation::Rela, symbol::Symbol};
 
 use crate::elf::{elf_map_sym, types::Elf};
 
@@ -60,10 +57,11 @@ impl Relocation {
     pub const SLOT14_ALT: Self = Self(49);
 }
 
-pub fn elf_arch_relocate<I, D>(elf: &mut Elf<I, D>, rela: &Rela, sym: &Symbol, addr: u32)
+/// _sym is unused because it was originally like that.
+/// TODO: Decide what to do with this unused variable that also existed in the original
+pub fn elf_arch_relocate<I>(elf: &mut Elf<I>, rela: &Rela, _sym: &Symbol, addr: u32)
 where
     I: Allocator,
-    D: Allocator,
 {
     // Get the address of the relocation in the actual memory
     let rela_addr = elf_map_sym(elf, rela.r_offset as u32) as *mut u32;

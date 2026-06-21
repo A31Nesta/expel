@@ -80,17 +80,16 @@ pub type ElfMain = extern "C" fn(argc: c_int, argv: *const *const c_char) -> c_i
 /// original loader component
 ///
 /// > https://github.com/espressif/esp-iot-solution/blob/ef13dcfd5aa18c4d6dca3d89d18173f8ae180a5f/components/elf_loader/include/private/elf_types.h#L264
-pub struct Elf<I, D>
+pub struct Elf<I>
 where
     I: Allocator, // Instructions Allocator
-    D: Allocator, // Data Allocator
 {
     /// Instruction buffer pointer
     #[cfg(feature = "bus-address-mirror")]
     pub ptext: Vec<u32, I>,
     /// Data buffer pointer
     #[cfg(feature = "bus-address-mirror")]
-    pub pdata: Vec<u8, D>,
+    pub pdata: alloc::vec::Vec<u8>,
 
     /// Segment buffer pointer
     #[cfg(not(feature = "bus-address-mirror"))]
@@ -123,14 +122,13 @@ where
         Vec<compile_error!("DLSO feature | ELF Struct: `esp_symtab_t` not implemented yet")>,
 }
 
-impl<I, D> Elf<I, D>
+impl<I> Elf<I>
 where
     I: Allocator,
-    D: Allocator,
 {
     pub fn new(
         #[cfg(feature = "bus-address-mirror")] ptext: Vec<u32, I>,
-        #[cfg(feature = "bus-address-mirror")] pdata: Vec<u8, D>,
+        #[cfg(feature = "bus-address-mirror")] pdata: alloc::vec::Vec<u8>,
 
         #[cfg(not(feature = "bus-address-mirror"))] psegment: *mut u8,
         #[cfg(not(feature = "bus-address-mirror"))] svaddr: u32,
@@ -175,12 +173,12 @@ where
         }
     }
 
-    pub fn empty(iram_alloc: I, data_alloc: D) -> Self {
+    pub fn empty(iram_alloc: I) -> Self {
         Self {
             #[cfg(feature = "bus-address-mirror")]
             ptext: Vec::new_in(iram_alloc),
             #[cfg(feature = "bus-address-mirror")]
-            pdata: Vec::new_in(data_alloc),
+            pdata: alloc::vec::Vec::new(),
             #[cfg(not(feature = "bus-address-mirror"))]
             psegment: Default::default(),
             #[cfg(not(feature = "bus-address-mirror"))]

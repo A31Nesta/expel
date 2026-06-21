@@ -35,17 +35,15 @@ use crate::elf::{
     util::{elf_align, has_flag, map_mem_err},
 };
 
-fn elf_load_section<I, D>(
+fn elf_load_section<I>(
     elf_file: &ElfBytes<NativeEndian>,
     pbuf: &[u8],
-    data_alloc: D,
     iram_alloc: I,
-) -> Result<Elf<I, D>, ExpelError>
+) -> Result<Elf<I>, ExpelError>
 where
     I: Allocator,
-    D: Allocator,
 {
-    let mut elf = Elf::empty(iram_alloc, data_alloc);
+    let mut elf = Elf::empty(iram_alloc);
 
     // Parse, we copy this block from `ElfFile::section_header_by_name` since it does what we want in this case lmao
     let (shdrs, strtab) = match elf_file
@@ -127,12 +125,8 @@ where
 
     // another malloc
     // TODO: Check if `data_size` is more than 0
-    elf.pdata.try_reserve(data_size as usize).map_err(|e| {
-        map_mem_err(
-            e,
-            "Attempted to allocate more ELF data than the maximum capacity",
-            "Allocation error for ELF data",
-        )
+    elf.pdata.try_reserve(data_size as usize).map_err(|_| {
+        ExpelError::MemoryFuckup("Error while reserving on the Global allocator... oops")
     })?;
 
     // memcpy `.text`
@@ -260,10 +254,9 @@ fn symtab_with_strtab_for_shdr<'a>(
 }
 
 /// Decode and relocate ELF data
-pub fn elf_relocate<I, D>(pbuf: &[u8], data_alloc: D, iram_alloc: I) -> Result<(), ExpelError>
+pub fn elf_relocate<I>(pbuf: &[u8], iram_alloc: I) -> Result<(), ExpelError>
 where
     I: Allocator,
-    D: Allocator,
 {
     // Parse the ELF file from `pbuf` and obtain the `ElfBytes` object
     let elf_file = ElfBytes::<NativeEndian>::minimal_parse(pbuf)
@@ -271,7 +264,7 @@ where
 
     // Get the `elf` object that contains allocated `text` and `data` buffers and section information
     #[cfg(feature = "bus-address-mirror")]
-    let mut elf = elf_load_section(&elf_file, pbuf, data_alloc, iram_alloc)?;
+    let mut elf = elf_load_section(&elf_file, pbuf, iram_alloc)?;
     #[cfg(not(feature = "bus-address-mirror"))]
     let elf = compile_error!(
         "elf_relocate: `bus-address-mirror` feature must be enabled. `elf_load_segment` function is not implemented in this version"
@@ -360,10 +353,9 @@ where
 /// Calls the main function using Rust String slices as arguments.
 ///
 /// THIS REQUIRES A GLOBAL ALLOCATOR!!
-pub fn elf_request<I, D>(elf: &Elf<I, D>, args: &[&str]) -> i32
+pub fn elf_request<I>(elf: &Elf<I>, args: &[&str]) -> i32
 where
     I: Allocator,
-    D: Allocator,
 {
     if let Some(entry) = elf.entry {
         // Conversion to C Strings
@@ -385,10 +377,9 @@ where
     }
 }
 
-fn elf_map_sym<I, D>(elf: &Elf<I, D>, sym: u32) -> u32
+fn elf_map_sym<I>(elf: &Elf<I>, sym: u32) -> u32
 where
     I: Allocator,
-    D: Allocator,
 {
     for section in &elf.sections {
         if (sym >= section.v_addr) && (sym < (section.v_addr + section.size)) {
