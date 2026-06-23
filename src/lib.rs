@@ -7,4 +7,4 @@ mod elf;
 
 // API
 pub use elf::ElfMain;
-pub use elf::{elf_relocate, elf_request};
+pub use elf::{elf_register_symbol, elf_relocate, elf_request, elf_unregister_symbol};

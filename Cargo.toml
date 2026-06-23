@@ -1,6 +1,6 @@
 [package]
 name        = "expel"
-version     = "0.0.1"
+version     = "0.0.2"
 edition     = "2024"
 description = """
 An ESP32 (Xtensa) ELF Loader. It allows you to load and execute ELF binaries from your Rust-based ESP-HAL (no_std) firmware.
@@ -33,3 +33,4 @@ esp32-p4 = ["risc-v"] # PSRAM possible, no further features required to enable i
 bytemuck = { version = "1.25.0", features = ["derive"] }
 elf = { version = "0.8.0", default-features = false }
 allocator-api2 = { version = "0.3.0", default-features = false, features = ["alloc"] }
+defmt = "1.0.1"

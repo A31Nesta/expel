@@ -8,6 +8,8 @@ mod util;
 
 mod arch;
 
+use defmt::{error, info};
+pub use symbol::{elf_register_symbol, elf_unregister_symbol};
 pub use types::ElfMain;
 
 use core::{
@@ -282,7 +284,8 @@ where
         // Get relocations
         let relas = elf_file
             .section_data_as_relas(&shdr)
-            .expect("Parsing error on Section Data as RELAs");
+            .inspect_err(|_| error!("Parsing error on Section Data as RELAs"))
+            .unwrap();
 
         // Get Symtab and Strtab
         let (symtab, strtab) = symtab_with_strtab_for_shdr(&elf_file, section_headers, &shdr);
@@ -291,28 +294,39 @@ where
         for rela in relas {
             let sym = symtab
                 .get(rela.r_sym as usize)
-                .expect("Couldn't obtain symbol for RELA");
+                .inspect_err(|_| error!("Couldn't obtain symbol for RELA"))
+                .unwrap();
 
             let r_type = rela.r_type as u8;
             let name = strtab
                 .get(sym.st_name as usize)
-                .expect("Couldn't parse string from strtab");
+                .inspect_err(|_| error!("Couldn't parse string from strtab"))
+                .unwrap();
+
+            info!("RELOCATING TYPE: {}", rela.r_type);
 
             let addr = if r_type == STT_COMMON || r_type == STT_OBJECT || r_type == STT_SECTION {
-                let addr = elf_find_symbol(name);
-
-                // We prepare this for future (possible updates)
-                #[cfg(feature = "dlso")]
-                {
-                    compile_error!("elf_relocate: DLSO is not yet supported");
+                // Name can be empty, we skip those cases
+                if name.is_empty() {
+                    None
                 }
+                // If the name is not empty, we actually do something lol
+                else {
+                    let addr = elf_find_symbol(name);
 
-                // TODO: Change check from `== 0` to `Result`
-                // TODO: Remove the panic!
-                if addr == 0 {
-                    panic!("Can't find dumbass symbol");
+                    // We prepare this for future (possible updates)
+                    #[cfg(feature = "dlso")]
+                    {
+                        compile_error!("elf_relocate: DLSO is not yet supported");
+                    }
+
+                    // TODO: Change check from `== 0` to `Result`
+                    // TODO: Remove the panic!
+                    if addr == 0 {
+                        panic!("Can't find dumbass symbol");
+                    }
+                    Some(addr)
                 }
-                Some(addr)
             } else if r_type == STT_FILE {
                 let addr = if sym.st_value != 0 {
                     elf_map_sym(&elf, sym.st_value as u32) as usize
@@ -338,6 +352,7 @@ where
             };
 
             if let Some(address) = addr {
+                // info!("About to relocate: NAME: `{}` | ADDR: `{}`", name, address);
                 elf_arch_relocate(&mut elf, &rela, &sym, address as u32);
             }
         }

@@ -1,4 +1,5 @@
 use allocator_api2::alloc::Allocator;
+use defmt::error;
 use elf::{relocation::Rela, symbol::Symbol};
 
 use crate::elf::{elf_map_sym, types::Elf};
@@ -94,7 +95,19 @@ where
                 *rela_addr = addr;
             }
         }
+        Relocation::RELOC_32 => unsafe {
+            let implicit_addend = *rela_addr;
+            let explicit_addend = rela.r_addend as u32;
+
+            let final_val = addr
+                .wrapping_add(explicit_addend)
+                .wrapping_add(implicit_addend);
+
+            *rela_addr = final_val;
+        },
         // TODO: Change this into an error type
-        Relocation(unknown) => panic!("Unsupported Relocation type with ID: {}", unknown),
+        Relocation(unknown) => {
+            error!("Unsupported Relocation type with ID: {}", unknown);
+        }
     }
 }
