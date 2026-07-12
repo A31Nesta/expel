@@ -1,77 +1,70 @@
 use core::ffi::{c_char, c_int};
 
+use alloc::string::String;
 use allocator_api2::alloc::Allocator;
 #[cfg(feature = "bus-address-mirror")]
 use allocator_api2::vec::Vec;
 #[cfg(feature = "dlso")]
 use allocator_api2::vec::Vec;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ElfSection {
+    pub index: u32,
+    pub name: String,
+
     pub v_addr: u32, // originally `uintptr_t`
     pub offset: u32, // originally `off_t`
     pub addr: u32,   // originally `uintptr_t`
     pub size: u32,   // originally `size_t`
-    pub index: u32,
+
+    pub iram: bool, // `true` for any `SHF_EXECINSTR`, manually overriden for `xt.lit` and `.literal`
 }
 
 impl ElfSection {
-    pub fn new(v_addr: u32, offset: u32, addr: u32, size: u32, index: u32) -> Self {
+    pub fn new(
+        index: u32,
+        name: String,
+        v_addr: u32,
+        offset: u32,
+        addr: u32,
+        size: u32,
+        iram: bool,
+    ) -> Self {
         Self {
+            index,
+            name,
             v_addr,
             offset,
             addr,
             size,
-            index,
+            iram,
         }
     }
 }
 
 #[derive(Default)]
 pub struct ElfSections {
-    pub text: ElfSection,
-    pub data: ElfSection,
-    pub rodata: ElfSection,
-    pub data_rel_ro: ElfSection,
-    pub literal: ElfSection,
-    pub bss: ElfSection,
+    vec: Vec<ElfSection>,
 }
 
-impl<'a> IntoIterator for &'a ElfSections {
-    type Item = &'a ElfSection;
-    type IntoIter = ElfSectionsIterator<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        ElfSectionsIterator::new(self)
+impl ElfSections {
+    pub fn new() -> Self {
+        Self { vec: Vec::new() }
     }
-}
 
-/// ElfSections as an iterator
-pub struct ElfSectionsIterator<'a> {
-    sections: &'a ElfSections,
-    index: u8,
-}
-
-impl<'a> ElfSectionsIterator<'a> {
-    pub fn new(sections: &'a ElfSections) -> Self {
-        Self { sections, index: 0 }
+    pub fn add_section(&mut self, section: ElfSection) {
+        self.vec.push(section);
     }
-}
 
-impl<'a> Iterator for ElfSectionsIterator<'a> {
-    type Item = &'a ElfSection;
+    pub fn vec(&self) -> &Vec<ElfSection> {
+        &self.vec
+    }
+    pub fn vec_mut(&mut self) -> &mut Vec<ElfSection> {
+        &mut self.vec
+    }
 
-    fn next(&mut self) -> Option<Self::Item> {
-        self.index += 1;
-        match self.index {
-            1 => Some(&self.sections.text),
-            2 => Some(&self.sections.data),
-            3 => Some(&self.sections.rodata),
-            4 => Some(&self.sections.data_rel_ro),
-            5 => Some(&self.sections.literal),
-            6 => Some(&self.sections.bss),
-            _ => None,
-        }
+    pub fn by_index(&self, index: u32) -> Option<&ElfSection> {
+        self.vec.iter().find(|sec| sec.index == index)
     }
 }
 

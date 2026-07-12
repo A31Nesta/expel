@@ -72,10 +72,6 @@ pub fn elf_arch_relocate<I>(
     // Get the address of the relocation in the actual memory
     let rela_addr = (base_address + rela.r_offset as u32) as *mut u32; // elf_map_sym(elf, rela.r_offset as u32) as *mut u32;
 
-    info!("rela.r_offset = {:#x}", rela.r_offset);
-    info!("rela_addr     = {:#x}", rela_addr);
-    info!("literal.addr  = {:#x}", elf.sections.literal.addr);
-
     // Manage the relocation depending on its type
     match Relocation(rela.r_type) {
         Relocation::RELATIVE => {

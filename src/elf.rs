@@ -18,7 +18,7 @@ use core::{
     ptr::{copy_nonoverlapping, null},
 };
 
-use alloc::{ffi::CString, vec::Vec};
+use alloc::{ffi::CString, string::ToString, vec::Vec};
 use allocator_api2::alloc::Allocator;
 use elf::{
     ElfBytes,
@@ -33,7 +33,7 @@ use crate::elf::{
     arch::elf_arch_relocate,
     error::ExpelError,
     symbol::elf_find_symbol,
-    types::Elf,
+    types::{Elf, ElfSection},
     util::{elf_align, has_flag, map_mem_err},
 };
 
@@ -64,71 +64,64 @@ where
         let name = strtab.get(shdr.sh_name as usize).unwrap_or("");
         let flags = shdr.sh_flags as u32;
 
-        if shdr.sh_type == SHT_PROGBITS
-        /* && has_flag(flags, SHF_ALLOC) */
-        {
-            // Get data of the `.text` section
-            if has_flag(flags, SHF_EXECINSTR) && name == ".text" {
-                elf.sections.text.v_addr = shdr.sh_addr as u32;
-                elf.sections.text.size = elf_align(shdr.sh_size as u32, 4);
-                elf.sections.text.offset = shdr.sh_offset as u32;
-                elf.sections.text.index = index as u32;
-                warn!("[TEXT] SECTION INDEX = {}", index);
+        if shdr.sh_type == SHT_PROGBITS {
+            // Generic: Get all sections :)
+            let mut section = ElfSection::new(
+                index as u32,
+                name.to_string(),
+                shdr.sh_addr as u32,
+                shdr.sh_offset as u32,
+                0,
+                shdr.sh_size as u32,
+                false,
+            );
+
+            // Now we fine-tune. We can't find the real address yet, but we can figure
+            // out if we have to align the size and if this should be placed in IRAM
+
+            if has_flag(flags, SHF_EXECINSTR)
+                // This below is a dirty trick because I don't know how to place `.literal` in IRAM in any other way
+                // I want `.literal` in IRAM because I need its address to be close to the `.text` address for relocations
+                || (name.starts_with(".literal") || name.starts_with(".xt.lit"))
+            {
+                section.size = elf_align(section.size, 4);
+                section.iram = true;
             }
-            // `.literal` section
-            else if name == ".literal" || name == ".xt.lit" {
-                elf.sections.literal.v_addr = shdr.sh_addr as u32;
-                elf.sections.literal.size = elf_align(shdr.sh_size as u32, 4); // shdr.sh_size as u32;
-                elf.sections.literal.offset = shdr.sh_offset as u32;
-                elf.sections.literal.index = index as u32;
-                warn!("[LITERAL] SECTION INDEX = {}", index);
-            }
-            // `.data` section
-            else if has_flag(flags, SHF_WRITE) && name == ".data" {
-                elf.sections.data.v_addr = shdr.sh_addr as u32;
-                elf.sections.data.size = shdr.sh_size as u32;
-                elf.sections.data.offset = shdr.sh_offset as u32;
-                elf.sections.data.index = index as u32;
-                warn!("[DATA] SECTION INDEX = {}", index);
-            }
-            // `.rodata` section. Rust _loves_ outputting several of these
-            // ( none of which is actually called `.rodata` :) )
-            else if name == ".rodata" {
-                elf.sections.rodata.v_addr = shdr.sh_addr as u32;
-                elf.sections.rodata.size = shdr.sh_size as u32;
-                elf.sections.rodata.offset = shdr.sh_offset as u32;
-                elf.sections.rodata.index = index as u32;
-                warn!("[RODATA] SECTION INDEX = {}", index);
-            }
-            // `.data.rel.ro` section
-            else if name == ".data.rel.ro" {
-                elf.sections.data_rel_ro.v_addr = shdr.sh_addr as u32;
-                elf.sections.data_rel_ro.size = shdr.sh_size as u32;
-                elf.sections.data_rel_ro.offset = shdr.sh_offset as u32;
-                elf.sections.data_rel_ro.index = index as u32;
-                warn!("[DATA.REL.RO] SECTION INDEX = {}", index);
-            }
+
+            elf.sections.add_section(section);
+
+            warn!("[{}] Registered section - Index = {}", name, index);
         }
         // `.bss` section
-        else if shdr.sh_type == SHT_NOBITS
-            && has_flag(flags, SHF_ALLOC | SHF_WRITE)
-            && name == ".bss"
-        {
-            elf.sections.bss.v_addr = shdr.sh_addr as u32;
-            elf.sections.bss.size = shdr.sh_size as u32;
-            elf.sections.bss.offset = shdr.sh_offset as u32;
-            warn!("[BSS] SECTION INDEX = {}", index);
+        else if shdr.sh_type == SHT_NOBITS && has_flag(flags, SHF_ALLOC | SHF_WRITE) {
+            let section = ElfSection::new(
+                index as u32,
+                name.to_string(),
+                shdr.sh_addr as u32,
+                shdr.sh_offset as u32,
+                0,
+                shdr.sh_size as u32,
+                false,
+            );
+
+            elf.sections.add_section(section);
         }
     });
 
-    if elf.sections.text.size == 0 {
-        error!("Oh shit! No Text?");
-        return Err(ExpelError::NoTextSection);
-    }
+    // Get total sizes of buffers
+    let mut iram_size: u32 = 0;
+    let mut dram_size: u32 = 0;
 
-    // Malloc here
-    let text_block_count = ((elf.sections.text.size + elf.sections.literal.size) as usize + 3) / 4;
-    elf.ptext.try_reserve(text_block_count).map_err(|e| {
+    elf.sections.vec().iter().for_each(|sec| {
+        if sec.iram {
+            iram_size += sec.size
+        } else {
+            dram_size += sec.size
+        }
+    });
+
+    let iram_block_count = (iram_size as usize + 3) / 4;
+    elf.ptext.try_reserve(iram_block_count).map_err(|e| {
         map_mem_err(
             e,
             "Attempted to allocate more IRAM than the maximum capacity", // When we exceed maximum capacity
@@ -136,80 +129,39 @@ where
         )
     })?;
 
-    // calc size here
-    let data_size = elf.sections.data.size
-        + elf.sections.rodata.size
-        + elf.sections.bss.size
-        + elf.sections.data_rel_ro.size;
-
     // another malloc
     // TODO: Check if `data_size` is more than 0
-    elf.pdata.try_reserve(data_size as usize).map_err(|_| {
+    elf.pdata.try_reserve(dram_size as usize).map_err(|_| {
         ExpelError::MemoryFuckup("Error while reserving on the Global allocator... oops")
     })?;
 
     info!("Allocated IRAM and DRAM buffers");
 
-    // memcpy `.text`
-    // ==============
-
-    // - Update the address of .text to point to the new buffer.
-    // By the way yes I comment a lot but I'm not a clanker, I just use comments to take notes and learn while porting the C code to Rust
+    // memcpy IRAM data
     let mut ptext = elf.ptext.as_mut_ptr();
-    elf.sections.text.addr = ptext.addr() as u32;
 
-    // TODO: Make sure everything is aligned first! We don't manually align `program_bytes` so it might not always work
-    unsafe {
-        copy_nonoverlapping(
-            pbuf.as_ptr().byte_offset(elf.sections.text.offset as isize) as *const u32,
-            ptext,
-            (elf.sections.text.size as usize + 3) / 4,
-        );
-        ptext = ptext.offset((elf.sections.text.size as isize + 3) / 4);
-
-        info!(
-            "Copied .text - Copying literal ({} bytes)",
-            elf.sections.literal.size
-        );
-
-        // .literal
-        if elf.sections.literal.size > 0 {
-            elf.sections.literal.addr = ptext.addr() as u32;
-            info!(
-                "Set .literal addr - Copying {} packets from address {:#x} | Buffer capacity: {} - Total used capacity: {}",
-                (elf.sections.literal.size as usize + 3) / 4,
-                elf.sections.literal.addr,
-                text_block_count,
-                (elf.sections.text.size as usize + 3) / 4
-                    + (elf.sections.literal.size as usize + 3) / 4
-            );
-            warn!(
-                "Base address: {:#x} | Offset by packets: {} | Updated address: {:#x} | Expected end: {:#x} | Allocated end: {:#x}",
-                elf.ptext.as_ptr().addr(),
-                (elf.sections.text.size as isize + 3) / 4,
-                ptext.addr(),
-                ptext.addr() + (((elf.sections.literal.size as usize + 3) / 4) * 4),
-                elf.ptext.as_ptr().addr()
-                    + (((elf.sections.text.size as usize + 3) / 4
-                        + (elf.sections.literal.size as usize + 3) / 4)
-                        * 4),
-            );
-            let mut intermediate: Vec<u32> =
-                Vec::with_capacity((elf.sections.literal.size as usize + 3) / 4);
+    for section in elf.sections.vec_mut().iter_mut().filter(|sec| sec.iram) {
+        // We finally have the address of the sections!
+        section.addr = ptext.addr() as u32;
+        // We create an intermediate buffer that we can copy byte by byte to ensure 32-bit alignment
+        let mut intermediate: Vec<u32> = Vec::with_capacity((section.size as usize + 3) / 4);
+        unsafe {
             copy_nonoverlapping(
-                pbuf.as_ptr()
-                    .byte_offset(elf.sections.literal.offset as isize) as *const u8,
+                pbuf.as_ptr().byte_offset(section.offset as isize) as *const u8,
                 intermediate.as_mut_ptr() as *mut u8,
-                ((elf.sections.literal.size as usize + 3) / 4) * 4,
+                ((section.size as usize + 3) / 4) * 4,
             );
+            // Then we copy the intermediate buffer into the real one
             copy_nonoverlapping(
                 intermediate.as_ptr(),
                 ptext,
-                (elf.sections.literal.size as usize + 3) / 4,
+                (section.size as usize + 3) / 4,
             );
-            info!("Copied .literal");
+
+            // Now we update this for the next iteration
+            ptext = ptext.offset((section.size as isize + 3) / 4);
         }
-        elf.ptext.set_len(text_block_count);
+        info!("[{}] Section copied", section.name.as_str());
     }
 
     info!("Copied IRAM sections");
@@ -220,70 +172,28 @@ where
         "`set-mmu` is an option for the ESP32-S2 when PSRAM is enabled, not implemented: ESP32-S2 support is not planned (can't test)"
     );
 
-    // memcpy the rest
-    // TODO: Check if size is more than 0
+    // memcpy DRAM data
     let mut pdata = elf.pdata.as_mut_ptr();
 
-    // .data
-    if elf.sections.data.size > 0 {
-        elf.sections.data.addr = pdata.addr() as u32;
+    for section in elf.sections.vec_mut().iter_mut().filter(|sec| !sec.iram) {
+        // We update the addr so that it has the real address:
+        section.addr = pdata.addr() as u32;
+
         unsafe {
             copy_nonoverlapping(
-                pbuf.as_ptr().offset(elf.sections.data.offset as isize),
+                pbuf.as_ptr().offset(section.offset as isize),
                 pdata,
-                elf.sections.data.size as usize,
+                section.size as usize,
             );
 
-            pdata = pdata.offset(elf.sections.data.size as isize);
-        }
-    }
-    // .rodata
-    if elf.sections.rodata.size > 0 {
-        elf.sections.rodata.addr = pdata.addr() as u32;
-        unsafe {
-            copy_nonoverlapping(
-                pbuf.as_ptr().offset(elf.sections.rodata.offset as isize),
-                pdata,
-                elf.sections.rodata.size as usize,
-            );
-
-            pdata = pdata.offset(elf.sections.rodata.size as isize);
-        }
-    }
-    // .data_rel_ro
-    if elf.sections.data_rel_ro.size > 0 {
-        elf.sections.data_rel_ro.addr = pdata.addr() as u32;
-        unsafe {
-            copy_nonoverlapping(
-                pbuf.as_ptr()
-                    .offset(elf.sections.data_rel_ro.offset as isize),
-                pdata,
-                elf.sections.data_rel_ro.size as usize,
-            );
-
-            pdata = pdata.offset(elf.sections.data_rel_ro.size as isize);
-        }
-    }
-    // .bss
-    if elf.sections.bss.size > 0 {
-        elf.sections.bss.addr = pdata.addr() as u32;
-        unsafe {
-            copy_nonoverlapping(
-                pbuf.as_ptr().offset(elf.sections.bss.offset as isize),
-                pdata,
-                elf.sections.bss.size as usize,
-            );
+            pdata = pdata.offset(section.size as isize);
         }
     }
 
     info!("Copied DRAM sections");
 
-    // DEBUG
-    info!(".text runtime addr: {:#x}", elf.sections.text.addr);
-    info!(".literal runtime addr: {:#x}", elf.sections.literal.addr);
-
     // Set ELF Entry
-    let entry = elf_file.ehdr.e_entry as u32 + elf.sections.text.addr - elf.sections.text.v_addr;
+    let entry = v_addr_to_addr(&elf, elf_file.ehdr.e_entry as u32).unwrap();
 
     #[cfg(feature = "cache-offset")]
     {
@@ -365,7 +275,8 @@ where
         // Relocation target section and address
         let target_section = elf
             .sections
-            .into_iter()
+            .vec()
+            .iter()
             .find(|sec| shdr.sh_info == sec.index);
         if target_section.is_none() {
             error!(
@@ -488,15 +399,22 @@ where
     }
 }
 
+pub fn v_addr_to_addr<I>(elf: &Elf<I>, v_addr: u32) -> Option<u32>
+where
+    I: Allocator,
+{
+    elf.sections.vec().iter().find_map(|sec| {
+        if v_addr >= sec.v_addr && v_addr < sec.v_addr + sec.size {
+            Some(sec.addr + (v_addr - sec.v_addr))
+        } else {
+            None
+        }
+    })
+}
+
 fn elf_map_sym<I>(elf: &Elf<I>, sym: u32) -> u32
 where
     I: Allocator,
 {
-    for section in &elf.sections {
-        if (sym >= section.v_addr) && (sym < (section.v_addr + section.size)) {
-            return sym - section.v_addr + section.addr;
-        }
-    }
-
-    0
+    v_addr_to_addr(elf, sym).unwrap_or(0)
 }

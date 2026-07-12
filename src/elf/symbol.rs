@@ -88,10 +88,7 @@ where
         sym_name, symbol.st_shndx, symbol.st_value
     );
 
-    let section_opt = elf
-        .sections
-        .into_iter()
-        .find(|sec| sec.index == symbol.st_shndx as u32);
+    let section_opt = elf.sections.by_index(symbol.st_shndx as u32);
 
     if let Some(section) = section_opt {
         return section.addr as usize + symbol.st_value as usize;
