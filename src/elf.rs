@@ -8,7 +8,7 @@ mod util;
 
 mod arch;
 
-use defmt::{error, info};
+use defmt::{error, info, warn};
 pub use symbol::{elf_register_symbol, elf_unregister_symbol};
 pub use types::ElfMain;
 
@@ -22,10 +22,7 @@ use alloc::{ffi::CString, vec::Vec};
 use allocator_api2::alloc::Allocator;
 use elf::{
     ElfBytes,
-    abi::{
-        SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE, SHT_NOBITS, SHT_PROGBITS, SHT_RELA, STT_COMMON,
-        STT_FILE, STT_OBJECT, STT_SECTION,
-    },
+    abi::{SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE, SHT_NOBITS, SHT_PROGBITS, SHT_RELA},
     endian::NativeEndian,
     section::{SectionHeader, SectionHeaderTable},
     string_table::StringTable,
@@ -63,34 +60,53 @@ where
     };
 
     // Read the headers to get the information needed to fill the `sections` object
-    shdrs.iter().for_each(|shdr| {
+    shdrs.iter().enumerate().for_each(|(index, shdr)| {
         let name = strtab.get(shdr.sh_name as usize).unwrap_or("");
         let flags = shdr.sh_flags as u32;
 
-        if shdr.sh_type == SHT_PROGBITS && has_flag(flags, SHF_ALLOC) {
+        if shdr.sh_type == SHT_PROGBITS
+        /* && has_flag(flags, SHF_ALLOC) */
+        {
             // Get data of the `.text` section
             if has_flag(flags, SHF_EXECINSTR) && name == ".text" {
                 elf.sections.text.v_addr = shdr.sh_addr as u32;
                 elf.sections.text.size = elf_align(shdr.sh_size as u32, 4);
                 elf.sections.text.offset = shdr.sh_offset as u32;
+                elf.sections.text.index = index as u32;
+                warn!("[TEXT] SECTION INDEX = {}", index);
+            }
+            // `.literal` section
+            else if name == ".literal" || name == ".xt.lit" {
+                elf.sections.literal.v_addr = shdr.sh_addr as u32;
+                elf.sections.literal.size = elf_align(shdr.sh_size as u32, 4); // shdr.sh_size as u32;
+                elf.sections.literal.offset = shdr.sh_offset as u32;
+                elf.sections.literal.index = index as u32;
+                warn!("[LITERAL] SECTION INDEX = {}", index);
             }
             // `.data` section
             else if has_flag(flags, SHF_WRITE) && name == ".data" {
                 elf.sections.data.v_addr = shdr.sh_addr as u32;
                 elf.sections.data.size = shdr.sh_size as u32;
                 elf.sections.data.offset = shdr.sh_offset as u32;
+                elf.sections.data.index = index as u32;
+                warn!("[DATA] SECTION INDEX = {}", index);
             }
-            // `.rodata` section
+            // `.rodata` section. Rust _loves_ outputting several of these
+            // ( none of which is actually called `.rodata` :) )
             else if name == ".rodata" {
                 elf.sections.rodata.v_addr = shdr.sh_addr as u32;
                 elf.sections.rodata.size = shdr.sh_size as u32;
                 elf.sections.rodata.offset = shdr.sh_offset as u32;
+                elf.sections.rodata.index = index as u32;
+                warn!("[RODATA] SECTION INDEX = {}", index);
             }
             // `.data.rel.ro` section
             else if name == ".data.rel.ro" {
                 elf.sections.data_rel_ro.v_addr = shdr.sh_addr as u32;
                 elf.sections.data_rel_ro.size = shdr.sh_size as u32;
                 elf.sections.data_rel_ro.offset = shdr.sh_offset as u32;
+                elf.sections.data_rel_ro.index = index as u32;
+                warn!("[DATA.REL.RO] SECTION INDEX = {}", index);
             }
         }
         // `.bss` section
@@ -101,20 +117,22 @@ where
             elf.sections.bss.v_addr = shdr.sh_addr as u32;
             elf.sections.bss.size = shdr.sh_size as u32;
             elf.sections.bss.offset = shdr.sh_offset as u32;
+            warn!("[BSS] SECTION INDEX = {}", index);
         }
     });
 
     if elf.sections.text.size == 0 {
+        error!("Oh shit! No Text?");
         return Err(ExpelError::NoTextSection);
     }
 
     // Malloc here
-    let text_block_count = (elf.sections.text.size as usize + 3) / 4;
+    let text_block_count = ((elf.sections.text.size + elf.sections.literal.size) as usize + 3) / 4;
     elf.ptext.try_reserve(text_block_count).map_err(|e| {
         map_mem_err(
             e,
-            "Attempted to allocate more `.text` than the maximum capacity", // When we exceed maximum capacity
-            "Allocation error for `.text`", // When there's an error during allocation
+            "Attempted to allocate more IRAM than the maximum capacity", // When we exceed maximum capacity
+            "Allocation error for IRAM", // When there's an error during allocation
         )
     })?;
 
@@ -130,23 +148,71 @@ where
         ExpelError::MemoryFuckup("Error while reserving on the Global allocator... oops")
     })?;
 
+    info!("Allocated IRAM and DRAM buffers");
+
     // memcpy `.text`
     // ==============
 
     // - Update the address of .text to point to the new buffer.
     // By the way yes I comment a lot but I'm not a clanker, I just use comments to take notes and learn while porting the C code to Rust
-    elf.sections.text.addr = elf.ptext.as_ptr().addr() as u32;
+    let mut ptext = elf.ptext.as_mut_ptr();
+    elf.sections.text.addr = ptext.addr() as u32;
 
     // TODO: Make sure everything is aligned first! We don't manually align `program_bytes` so it might not always work
-    let text_dest_ptr = elf.ptext.as_mut_ptr() as *mut u32;
     unsafe {
         copy_nonoverlapping(
             pbuf.as_ptr().byte_offset(elf.sections.text.offset as isize) as *const u32,
-            text_dest_ptr,
-            text_block_count,
+            ptext,
+            (elf.sections.text.size as usize + 3) / 4,
         );
+        ptext = ptext.offset((elf.sections.text.size as isize + 3) / 4);
+
+        info!(
+            "Copied .text - Copying literal ({} bytes)",
+            elf.sections.literal.size
+        );
+
+        // .literal
+        if elf.sections.literal.size > 0 {
+            elf.sections.literal.addr = ptext.addr() as u32;
+            info!(
+                "Set .literal addr - Copying {} packets from address {:#x} | Buffer capacity: {} - Total used capacity: {}",
+                (elf.sections.literal.size as usize + 3) / 4,
+                elf.sections.literal.addr,
+                text_block_count,
+                (elf.sections.text.size as usize + 3) / 4
+                    + (elf.sections.literal.size as usize + 3) / 4
+            );
+            warn!(
+                "Base address: {:#x} | Offset by packets: {} | Updated address: {:#x} | Expected end: {:#x} | Allocated end: {:#x}",
+                elf.ptext.as_ptr().addr(),
+                (elf.sections.text.size as isize + 3) / 4,
+                ptext.addr(),
+                ptext.addr() + (((elf.sections.literal.size as usize + 3) / 4) * 4),
+                elf.ptext.as_ptr().addr()
+                    + (((elf.sections.text.size as usize + 3) / 4
+                        + (elf.sections.literal.size as usize + 3) / 4)
+                        * 4),
+            );
+            let mut intermediate: Vec<u32> =
+                Vec::with_capacity((elf.sections.literal.size as usize + 3) / 4);
+            copy_nonoverlapping(
+                pbuf.as_ptr()
+                    .byte_offset(elf.sections.literal.offset as isize) as *const u8,
+                intermediate.as_mut_ptr() as *mut u8,
+                ((elf.sections.literal.size as usize + 3) / 4) * 4,
+            );
+            copy_nonoverlapping(
+                intermediate.as_ptr(),
+                ptext,
+                (elf.sections.literal.size as usize + 3) / 4,
+            );
+            info!("Copied .literal");
+        }
         elf.ptext.set_len(text_block_count);
     }
+
+    info!("Copied IRAM sections");
 
     // CONFIG_ELF_LOADER_SET_MMU
     #[cfg(feature = "set-mmu")]
@@ -209,6 +275,12 @@ where
             );
         }
     }
+
+    info!("Copied DRAM sections");
+
+    // DEBUG
+    info!(".text runtime addr: {:#x}", elf.sections.text.addr);
+    info!(".literal runtime addr: {:#x}", elf.sections.literal.addr);
 
     // Set ELF Entry
     let entry = elf_file.ehdr.e_entry as u32 + elf.sections.text.addr - elf.sections.text.v_addr;
@@ -290,6 +362,20 @@ where
         // Get Symtab and Strtab
         let (symtab, strtab) = symtab_with_strtab_for_shdr(&elf_file, section_headers, &shdr);
 
+        // Relocation target section and address
+        let target_section = elf
+            .sections
+            .into_iter()
+            .find(|sec| shdr.sh_info == sec.index);
+        if target_section.is_none() {
+            error!(
+                "Couldn't obtain target for relocation section. Target section: {}",
+                shdr.sh_info
+            );
+            panic!("Couldn't obtain target for relocation section");
+        }
+        let target_base = target_section.unwrap().addr;
+
         // Main loop over all relocations
         for rela in relas {
             let sym = symtab
@@ -303,16 +389,23 @@ where
                 .inspect_err(|_| error!("Couldn't parse string from strtab"))
                 .unwrap();
 
-            info!("RELOCATING TYPE: {}", rela.r_type);
+            info!(
+                "RELOCATING TYPE: {} | NAME OF SYMBOL: {}",
+                rela.r_type, name
+            );
 
-            let addr = if r_type == STT_COMMON || r_type == STT_OBJECT || r_type == STT_SECTION {
+            let addr = if r_type == 5  /* R_XTENSA_RELATIVE */ ||
+                          r_type == 1  /* R_XTENSA_32 */       ||
+                          r_type == 3
+            /* R_XTENSA_GLOB_DAT */
+            {
                 // Name can be empty, we skip those cases
                 if name.is_empty() {
                     None
                 }
                 // If the name is not empty, we actually do something lol
                 else {
-                    let addr = elf_find_symbol(name);
+                    let addr = elf_find_symbol(name, Some(&elf), Some(&sym));
 
                     // We prepare this for future (possible updates)
                     #[cfg(feature = "dlso")]
@@ -323,15 +416,18 @@ where
                     // TODO: Change check from `== 0` to `Result`
                     // TODO: Remove the panic!
                     if addr == 0 {
+                        error!("Can't find dumbass symbol");
                         panic!("Can't find dumbass symbol");
                     }
                     Some(addr)
                 }
-            } else if r_type == STT_FILE {
+            } else if r_type == 4 /* R_XTENSA_JMP_SLOT */ || r_type == 20
+            /* R_XTENSA_SLOT0_OP */
+            {
                 let addr = if sym.st_value != 0 {
                     elf_map_sym(&elf, sym.st_value as u32) as usize
                 } else {
-                    elf_find_symbol(name)
+                    elf_find_symbol(name, Some(&elf), Some(&sym))
                 };
 
                 // We prepare this for future (possible updates)
@@ -343,6 +439,7 @@ where
                 // TODO: Change check from `== 0` to `Result`
                 // TODO: Remove the panic!
                 if addr == 0 {
+                    error!("Can't find dumbass symbol");
                     panic!("Can't find dumbass symbol");
                 }
 
@@ -353,7 +450,7 @@ where
 
             if let Some(address) = addr {
                 // info!("About to relocate: NAME: `{}` | ADDR: `{}`", name, address);
-                elf_arch_relocate(&mut elf, &rela, &sym, address as u32);
+                elf_arch_relocate(&mut elf, &rela, &sym, address as u32, target_base);
             }
         }
     }

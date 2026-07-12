@@ -12,15 +12,17 @@ pub struct ElfSection {
     pub offset: u32, // originally `off_t`
     pub addr: u32,   // originally `uintptr_t`
     pub size: u32,   // originally `size_t`
+    pub index: u32,
 }
 
 impl ElfSection {
-    pub fn new(v_addr: u32, offset: u32, addr: u32, size: u32) -> Self {
+    pub fn new(v_addr: u32, offset: u32, addr: u32, size: u32, index: u32) -> Self {
         Self {
             v_addr,
             offset,
             addr,
             size,
+            index,
         }
     }
 }
@@ -31,6 +33,7 @@ pub struct ElfSections {
     pub data: ElfSection,
     pub rodata: ElfSection,
     pub data_rel_ro: ElfSection,
+    pub literal: ElfSection,
     pub bss: ElfSection,
 }
 
@@ -65,7 +68,8 @@ impl<'a> Iterator for ElfSectionsIterator<'a> {
             2 => Some(&self.sections.data),
             3 => Some(&self.sections.rodata),
             4 => Some(&self.sections.data_rel_ro),
-            5 => Some(&self.sections.bss),
+            5 => Some(&self.sections.literal),
+            6 => Some(&self.sections.bss),
             _ => None,
         }
     }

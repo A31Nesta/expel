@@ -1,5 +1,5 @@
 use allocator_api2::alloc::Allocator;
-use defmt::error;
+use defmt::{error, info, panic};
 use elf::{relocation::Rela, symbol::Symbol};
 
 use crate::elf::{elf_map_sym, types::Elf};
@@ -60,12 +60,21 @@ impl Relocation {
 
 /// _sym is unused because it was originally like that.
 /// TODO: Decide what to do with this unused variable that also existed in the original
-pub fn elf_arch_relocate<I>(elf: &mut Elf<I>, rela: &Rela, _sym: &Symbol, addr: u32)
-where
+pub fn elf_arch_relocate<I>(
+    elf: &mut Elf<I>,
+    rela: &Rela,
+    _sym: &Symbol,
+    addr: u32,
+    base_address: u32,
+) where
     I: Allocator,
 {
     // Get the address of the relocation in the actual memory
-    let rela_addr = elf_map_sym(elf, rela.r_offset as u32) as *mut u32;
+    let rela_addr = (base_address + rela.r_offset as u32) as *mut u32; // elf_map_sym(elf, rela.r_offset as u32) as *mut u32;
+
+    info!("rela.r_offset = {:#x}", rela.r_offset);
+    info!("rela_addr     = {:#x}", rela_addr);
+    info!("literal.addr  = {:#x}", elf.sections.literal.addr);
 
     // Manage the relocation depending on its type
     match Relocation(rela.r_type) {
@@ -96,18 +105,92 @@ where
             }
         }
         Relocation::RELOC_32 => unsafe {
-            let implicit_addend = *rela_addr;
-            let explicit_addend = rela.r_addend as u32;
+            info!("-- Relocating R_XTENSA_32");
 
-            let final_val = addr
-                .wrapping_add(explicit_addend)
-                .wrapping_add(implicit_addend);
-
+            let final_val = addr.wrapping_add(rela.r_addend as u32);
             *rela_addr = final_val;
+
+            info!("-- Relocated; Final Value: `{:#x}`", final_val);
+        },
+        Relocation::SLOT0_OP => unsafe {
+            info!("-- Relocating R_XTENSA_SLOT0_OP");
+
+            // Implementation ported from here:
+            // - https://github.com/niicoooo/esp32-elfloader/blob/52531c631f1c723e6931966170f0b20ef0efa6db/components/elfloader/loader.c#L188
+            let v = read_unaligned_32(rela_addr);
+            let sym_addr = addr.wrapping_add(rela.r_addend as u32);
+
+            info!("unpatched instruction = {:#010x}", v);
+
+            // L32R
+            if (v & 0x00000F) == 0x000001 {
+                info!("---- Opcode format: L32R");
+
+                let delta_raw: i32 = sym_addr as i32 - ((rela_addr.addr() + 3) & !0x3) as i32;
+                if delta_raw & 0x3 > 0 {
+                    error!("Relocation: L32R error");
+                    panic!("Relocation: L32R error");
+                }
+                let delta = (delta_raw >> 2) as u32;
+
+                // Patch the bytes of `v` with delta
+                let mut v_bytes = v.to_le_bytes();
+                let delta_bytes = delta.to_le_bytes();
+                v_bytes[1] = delta_bytes[0];
+                v_bytes[2] = delta_bytes[1];
+                let patched = u32::from_le_bytes(v_bytes);
+
+                info!("patched instruction = {:#010x}", patched);
+
+                // Write
+                write_unaligned_32(rela_addr, patched);
+
+                info!("symbol = {:#010x}", sym_addr);
+                info!("place  = {:#010x}", rela_addr.addr());
+                info!("delta_raw = {:#010x}", delta_raw);
+                info!("delta = {:#010x}", delta);
+
+                info!("-- Relocated; Final Value: `{:#x}`", patched);
+            }
+
+            // CALL0, CALL4, CALL8, CALL12, J
+            // TODO: Implement these if necessary
         },
         // TODO: Change this into an error type
         Relocation(unknown) => {
             error!("Unsupported Relocation type with ID: {}", unknown);
         }
     }
+}
+
+#[inline(always)]
+pub unsafe fn read_unaligned_32(ptr: *const u32) -> u32 {
+    let base_addr = (ptr.addr() & !0x3) as *const u32;
+    let offset = (ptr.addr() & 0x3) as u32;
+
+    let low_word = unsafe { *base_addr };
+    let high_word = unsafe { *base_addr.add(1) };
+    let combined = ((high_word as u64) << 32) | (low_word as u64);
+
+    // Get the section that we need
+    (combined >> (offset * 8)) as u32
+}
+
+#[inline(always)]
+pub unsafe fn write_unaligned_32(ptr: *mut u32, value: u32) {
+    let base_addr = (ptr.addr() & !0x3) as *mut u32;
+    let offset = (ptr.addr() & 0x3) as u32;
+
+    let low_word = unsafe { *base_addr };
+    let high_word = unsafe { *base_addr.add(1) };
+    let mut combined = ((high_word as u64) << 32) | (low_word as u64);
+
+    // Write value into `combined`, then write that u64 into `base_addr`
+    combined &= !((0xFFFFFFFFu64) << (offset * 8));
+    combined |= (value as u64) << (offset * 8);
+
+    unsafe {
+        *base_addr = combined as u32;
+        *base_addr.add(1) = (combined >> 32) as u32;
+    };
 }

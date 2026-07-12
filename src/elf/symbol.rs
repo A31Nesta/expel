@@ -1,13 +1,9 @@
-use core::{
-    cell::UnsafeCell,
-    mem::transmute,
-    sync::atomic::{AtomicPtr, Ordering},
-};
+use core::cell::UnsafeCell;
 
-pub type SymbolResolver = fn(sym_name: &str) -> usize;
+use allocator_api2::alloc::Allocator;
+use defmt::info;
 
-pub static CURRENT_RESOLVER: AtomicPtr<SymbolResolver> =
-    AtomicPtr::new(elf_find_sym_default as *mut _);
+use crate::elf::types::Elf;
 
 #[derive(Clone, Copy)]
 pub struct Symbol {
@@ -24,11 +20,6 @@ const MAX_SYMBOLS: usize = 128;
 static SYMBOLS: SymbolTable = SymbolTable {
     symbols: UnsafeCell::new([Symbol { name: "", addr: 0 }; MAX_SYMBOLS]),
 };
-
-pub fn elf_find_symbol(sym_name: &str) -> usize {
-    let resolver: SymbolResolver = unsafe { transmute(CURRENT_RESOLVER.load(Ordering::SeqCst)) };
-    resolver(sym_name)
-}
 
 /// Registers a symbol and makes it available to loaded programs
 pub fn elf_register_symbol(sym_name: &'static str, address: usize) {
@@ -66,13 +57,47 @@ pub fn elf_unregister_symbol(sym_name: &str) {
 }
 
 /// Find symbol address by name
-/// TODO: Create a proper symbol table lookup implementation
-fn elf_find_sym_default(sym_name: &str) -> usize {
+pub fn elf_find_symbol<T>(
+    sym_name: &str,
+    elf_opt: Option<&Elf<T>>,
+    symbol_opt: Option<&elf::symbol::Symbol>,
+) -> usize
+where
+    T: Allocator,
+{
     for sym in unsafe { *SYMBOLS.symbols.get() } {
-        if sym.name == sym_name {
+        if sym.name == sym_name && !sym.name.is_empty() {
+            info!("Symbol `{}` found; addr: `{}`", sym_name, sym.addr);
             return sym.addr;
         }
     }
+
+    // info!("Symbol not found; attempting to obtain without name...");
+
+    // Adapted from this code:
+    // https://github.com/niicoooo/esp32-elfloader/blob/52531c631f1c723e6931966170f0b20ef0efa6db/components/elfloader/loader.c#L313
+    // Find without name. We check like this because we can't `if let` for 2 thingies
+    if elf_opt.is_none() || symbol_opt.is_none() {
+        return 0;
+    }
+    let elf = elf_opt.unwrap();
+    let symbol = symbol_opt.unwrap();
+
+    info!(
+        "sym={} shndx={} st_value={:#x}",
+        sym_name, symbol.st_shndx, symbol.st_value
+    );
+
+    let section_opt = elf
+        .sections
+        .into_iter()
+        .find(|sec| sec.index == symbol.st_shndx as u32);
+
+    if let Some(section) = section_opt {
+        return section.addr as usize + symbol.st_value as usize;
+    }
+
+    // info!("Found nuffin'. Crash incoming, just to let you know");
 
     0
 }
