@@ -307,33 +307,27 @@ where
 
             let addr = if r_type == 5  /* R_XTENSA_RELATIVE */ ||
                           r_type == 1  /* R_XTENSA_32 */       ||
-                          r_type == 3
-            /* R_XTENSA_GLOB_DAT */
-            {
-                // Name can be empty, we skip those cases
-                if name.is_empty() {
-                    None
-                }
-                // If the name is not empty, we actually do something lol
-                else {
-                    let addr = elf_find_symbol(name, Some(&elf), Some(&sym));
-
-                    // We prepare this for future (possible updates)
-                    #[cfg(feature = "dlso")]
-                    {
-                        compile_error!("elf_relocate: DLSO is not yet supported");
-                    }
-
-                    // TODO: Change check from `== 0` to `Result`
-                    // TODO: Remove the panic!
-                    if addr == 0 {
-                        error!("Can't find dumbass symbol");
-                        panic!("Can't find dumbass symbol");
-                    }
-                    Some(addr)
-                }
-            } else if r_type == 4 /* R_XTENSA_JMP_SLOT */ || r_type == 20
+                          r_type == 3  /* R_XTENSA_GLOB_DAT */ ||
+                          r_type == 20
             /* R_XTENSA_SLOT0_OP */
+            {
+                let addr = elf_find_symbol(name, Some(&elf), Some(&sym));
+
+                // We prepare this for future (possible updates)
+                #[cfg(feature = "dlso")]
+                {
+                    compile_error!("elf_relocate: DLSO is not yet supported");
+                }
+
+                // TODO: Change check from `== 0` to `Result`
+                // TODO: Remove the panic!
+                if addr == 0 {
+                    error!("Can't find dumbass symbol");
+                    panic!("Can't find dumbass symbol");
+                }
+                Some(addr)
+            } else if r_type == 4
+            /* R_XTENSA_JMP_SLOT */
             {
                 let addr = if sym.st_value != 0 {
                     elf_map_sym(&elf, sym.st_value as u32) as usize
