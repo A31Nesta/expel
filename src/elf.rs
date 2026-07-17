@@ -10,10 +10,10 @@ mod arch;
 
 use defmt::{error, info, warn};
 pub use symbol::{elf_register_symbol, elf_unregister_symbol};
-pub use types::ElfMain;
+pub use types::{Elf, ElfEntry};
 
 use core::{
-    ffi::{c_char, c_int},
+    ffi::c_char,
     mem::transmute,
     ptr::{copy_nonoverlapping, null},
 };
@@ -33,7 +33,7 @@ use crate::elf::{
     arch::elf_arch_relocate,
     error::ExpelError,
     symbol::elf_find_symbol,
-    types::{Elf, ElfSection},
+    types::ElfSection,
     util::{elf_align, has_flag, map_mem_err},
 };
 
@@ -366,10 +366,10 @@ where
     Ok(elf)
 }
 
-/// Calls the main function using Rust String slices as arguments.
+/// Returns the entry point.
 ///
 /// THIS REQUIRES A GLOBAL ALLOCATOR!!
-pub fn elf_request<I>(elf: &Elf<I>, args: &[&str]) -> i32
+pub fn elf_request<I>(elf: &Elf<I>, args: &[&str]) -> Option<ElfEntry>
 where
     I: Allocator,
 {
@@ -386,10 +386,11 @@ where
         argv.push(null());
 
         // Ru-nning in the nine-ties
-        let main: ElfMain = unsafe { transmute(entry) };
-        main(args.len() as c_int, argv.as_ptr())
+        let _start: ElfEntry = unsafe { transmute(entry) };
+        // main(args.len() as c_int, argv.as_ptr())
+        Some(_start)
     } else {
-        -1
+        None
     }
 }
 

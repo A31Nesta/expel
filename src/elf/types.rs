@@ -1,4 +1,4 @@
-use core::ffi::{c_char, c_int};
+// use core::ffi::{c_char, c_int};
 
 use alloc::string::String;
 use allocator_api2::alloc::Allocator;
@@ -68,7 +68,8 @@ impl ElfSections {
     }
 }
 
-pub type ElfMain = extern "C" fn(argc: c_int, argv: *const *const c_char) -> c_int;
+// pub type ElfMain = extern "C" fn(argc: c_int, argv: *const *const c_char) -> c_int;
+pub type ElfEntry = extern "C" fn() -> !;
 
 /// ELF struct that will be used throughout this crate, adapted from
 /// the ELF Loader IDF Component by Espressif.
