@@ -1,6 +1,8 @@
 use allocator_api2::alloc::Allocator;
-use defmt::{error, info, panic};
 use elf::{relocation::Rela, symbol::Symbol};
+
+#[cfg(feature = "logging")]
+use defmt::{error, info, panic};
 
 use crate::elf::{elf_map_sym, types::Elf};
 
@@ -101,14 +103,17 @@ pub fn elf_arch_relocate<I>(
             }
         }
         Relocation::RELOC_32 => unsafe {
+            #[cfg(feature = "logging")]
             info!("-- Relocating R_XTENSA_32");
 
             let final_val = addr.wrapping_add(rela.r_addend as u32);
             *rela_addr = final_val;
 
+            #[cfg(feature = "logging")]
             info!("-- Relocated; Final Value: `{:#x}`", final_val);
         },
         Relocation::SLOT0_OP => unsafe {
+            #[cfg(feature = "logging")]
             info!("-- Relocating R_XTENSA_SLOT0_OP");
 
             // Implementation ported from here:
@@ -116,14 +121,17 @@ pub fn elf_arch_relocate<I>(
             let v = read_unaligned_32(rela_addr);
             let sym_addr = addr.wrapping_add(rela.r_addend as u32);
 
+            #[cfg(feature = "logging")]
             info!("unpatched instruction = {:#010x}", v);
 
             // L32R
             if (v & 0x00000F) == 0x000001 {
+                #[cfg(feature = "logging")]
                 info!("---- Opcode format: L32R");
 
                 let delta_raw: i32 = sym_addr as i32 - ((rela_addr.addr() + 3) & !0x3) as i32;
                 if delta_raw & 0x3 > 0 {
+                    #[cfg(feature = "logging")]
                     error!("Relocation: L32R error");
                     panic!("Relocation: L32R error");
                 }
@@ -136,24 +144,30 @@ pub fn elf_arch_relocate<I>(
                 v_bytes[2] = delta_bytes[1];
                 let patched = u32::from_le_bytes(v_bytes);
 
+                #[cfg(feature = "logging")]
                 info!("patched instruction = {:#010x}", patched);
 
                 // Write
                 write_unaligned_32(rela_addr, patched);
 
-                info!("symbol = {:#010x}", sym_addr);
-                info!("place  = {:#010x}", rela_addr.addr());
-                info!("delta_raw = {:#010x}", delta_raw);
-                info!("delta = {:#010x}", delta);
+                #[cfg(feature = "logging")]
+                {
+                    info!("symbol = {:#010x}", sym_addr);
+                    info!("place  = {:#010x}", rela_addr.addr());
+                    info!("delta_raw = {:#010x}", delta_raw);
+                    info!("delta = {:#010x}", delta);
 
-                info!("-- Relocated; Final Value: `{:#x}`", patched);
+                    info!("-- Relocated; Final Value: `{:#x}`", patched);
+                }
             }
 
             // CALL0, CALL4, CALL8, CALL12, J
             // TODO: Implement these if necessary
         },
         // TODO: Change this into an error type
+        #[allow(unused_variables)] // only used when using the logging feature
         Relocation(unknown) => {
+            #[cfg(feature = "logging")]
             error!("Unsupported Relocation type with ID: {}", unknown);
         }
     }

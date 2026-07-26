@@ -12,6 +12,9 @@ license     = "MIT OR Apache-2.0"
 [features]
 default = ["esp32-s3"]
 
+# Warning: _WILL_ fill your serial monitor with shit. Use only for debugging lmfao
+logging = ["dep:defmt"]
+
 bus-address-mirror = []
 dlso = []
 cache-offset = []
@@ -33,4 +36,4 @@ esp32-p4 = ["risc-v"] # PSRAM possible, no further features required to enable i
 bytemuck = { version = "1.25.0", features = ["derive"] }
 elf = { version = "0.8.0", default-features = false }
 allocator-api2 = { version = "0.3.0", default-features = false, features = ["alloc"] }
-defmt = "1.0.1"
+defmt = { version = "1.0.1", optional = true }

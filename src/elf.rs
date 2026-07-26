@@ -8,7 +8,6 @@ mod util;
 
 mod arch;
 
-use defmt::{error, info, warn};
 pub use symbol::{elf_register_symbol, elf_unregister_symbol};
 pub use types::{Elf, ElfEntry};
 
@@ -28,6 +27,9 @@ use elf::{
     string_table::StringTable,
     symbol::SymbolTable,
 };
+
+#[cfg(feature = "logging")]
+use defmt::{error, info, warn};
 
 use crate::elf::{
     arch::elf_arch_relocate,
@@ -90,6 +92,7 @@ where
 
             elf.sections.add_section(section);
 
+            #[cfg(feature = "logging")]
             warn!("[{}] Registered section - Index = {}", name, index);
         }
         // `.bss` section
@@ -135,6 +138,7 @@ where
         ExpelError::MemoryFuckup("Error while reserving on the Global allocator... oops")
     })?;
 
+    #[cfg(feature = "logging")]
     info!("Allocated IRAM and DRAM buffers");
 
     // memcpy IRAM data
@@ -161,9 +165,11 @@ where
             // Now we update this for the next iteration
             ptext = ptext.offset((section.size as isize + 3) / 4);
         }
+        #[cfg(feature = "logging")]
         info!("[{}] Section copied", section.name.as_str());
     }
 
+    #[cfg(feature = "logging")]
     info!("Copied IRAM sections");
 
     // CONFIG_ELF_LOADER_SET_MMU
@@ -190,6 +196,7 @@ where
         }
     }
 
+    #[cfg(feature = "logging")]
     info!("Copied DRAM sections");
 
     // Set ELF Entry
@@ -266,7 +273,10 @@ where
         // Get relocations
         let relas = elf_file
             .section_data_as_relas(&shdr)
-            .inspect_err(|_| error!("Parsing error on Section Data as RELAs"))
+            .inspect_err(|_| {
+                #[cfg(feature = "logging")]
+                error!("Parsing error on Section Data as RELAs");
+            })
             .unwrap();
 
         // Get Symtab and Strtab
@@ -279,6 +289,7 @@ where
             .iter()
             .find(|sec| shdr.sh_info == sec.index);
         if target_section.is_none() {
+            #[cfg(feature = "logging")]
             error!(
                 "Couldn't obtain target for relocation section. Target section: {}",
                 shdr.sh_info
@@ -291,15 +302,22 @@ where
         for rela in relas {
             let sym = symtab
                 .get(rela.r_sym as usize)
-                .inspect_err(|_| error!("Couldn't obtain symbol for RELA"))
+                .inspect_err(|_| {
+                    #[cfg(feature = "logging")]
+                    error!("Couldn't obtain symbol for RELA");
+                })
                 .unwrap();
 
             let r_type = rela.r_type as u8;
             let name = strtab
                 .get(sym.st_name as usize)
-                .inspect_err(|_| error!("Couldn't parse string from strtab"))
+                .inspect_err(|_| {
+                    #[cfg(feature = "logging")]
+                    error!("Couldn't parse string from strtab");
+                })
                 .unwrap();
 
+            #[cfg(feature = "logging")]
             info!(
                 "RELOCATING TYPE: {} | NAME OF SYMBOL: {}",
                 rela.r_type, name
@@ -322,6 +340,7 @@ where
                 // TODO: Change check from `== 0` to `Result`
                 // TODO: Remove the panic!
                 if addr == 0 {
+                    #[cfg(feature = "logging")]
                     error!("Can't find dumbass symbol");
                     panic!("Can't find dumbass symbol");
                 }
@@ -344,6 +363,7 @@ where
                 // TODO: Change check from `== 0` to `Result`
                 // TODO: Remove the panic!
                 if addr == 0 {
+                    #[cfg(feature = "logging")]
                     error!("Can't find dumbass symbol");
                     panic!("Can't find dumbass symbol");
                 }

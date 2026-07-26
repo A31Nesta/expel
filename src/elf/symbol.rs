@@ -1,6 +1,8 @@
 use core::cell::UnsafeCell;
 
 use allocator_api2::alloc::Allocator;
+
+#[cfg(feature = "logging")]
 use defmt::info;
 
 use crate::elf::types::Elf;
@@ -67,6 +69,7 @@ where
 {
     for sym in unsafe { *SYMBOLS.symbols.get() } {
         if sym.name == sym_name && !sym.name.is_empty() {
+            #[cfg(feature = "logging")]
             info!("Symbol `{}` found; addr: `{}`", sym_name, sym.addr);
             return sym.addr;
         }
@@ -83,6 +86,7 @@ where
     let elf = elf_opt.unwrap();
     let symbol = symbol_opt.unwrap();
 
+    #[cfg(feature = "logging")]
     info!(
         "sym={} shndx={} st_value={:#x}",
         sym_name, symbol.st_shndx, symbol.st_value
